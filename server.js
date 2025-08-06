@@ -22,7 +22,7 @@ io.on('connection', socket => {
     io.to(to).emit('incoming-call', { from: socket.id });
   });
 
-  //  chấp nhận
+  // chấp nhận
   socket.on('call-accepted', ({ to }) => {
     io.to(to).emit('call-accepted', { from: socket.id });
   });
