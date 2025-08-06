@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Peer2</title>
+  <style>
+    video { width: 300px; margin: 5px; background: #000; }
+    #incoming { display: none; background: #eee; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h2>Peer2</h2>
+  <div id="status">Connecting...</div>
+  <div id="incoming">
+    <span id="callerId"></span> is calling...
+    <button id="acceptBtn">Accept</button>
+    <button id="rejectBtn">Reject</button>
+  </div>
+  <div>
+    <video id="localVideo" autoplay muted playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+  </div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io();
+let pc, peerId;
+let localStream;
+const statusEl = document.getElementById('status');
+const incomingDiv = document.getElementById('incoming');
+const callerIdEl = document.getElementById('callerId');
+const acceptBtn = document.getElementById('acceptBtn');
+const rejectBtn = document.getElementById('rejectBtn');
+const localVid = document.getElementById('localVideo');
+const remoteVid = document.getElementById('remoteVideo');
+
+socket.on('connect', async () => {
+  statusEl.textContent = " Connected to server";
+  await initMedia();
+  socket.emit('join');
+});
+
+socket.on('incoming-call', ({ from }) => {
+  peerId = from;
+  callerIdEl.textContent = from;
+  incomingDiv.style.display = 'block';
+  statusEl.textContent = "Incoming call...";
+});
+
+acceptBtn.onclick = () => {
+  incomingDiv.style.display = 'none';
+  socket.emit('call-accepted', { to: peerId });
+  createPeerConnection();
+};
+
+rejectBtn.onclick = () => {
+  incomingDiv.style.display = 'none';
+  socket.emit('call-rejected', { to: peerId });
+  peerId = null;
+  statusEl.textContent = " Call rejected";
+};
+
+// sends offer
+socket.on('offer', async ({ offer, from }) => {
+  peerId = from;
+  if (!pc) createPeerConnection();
+  await pc.setRemoteDescription(new RTCSessionDescription(offer));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  socket.emit('answer', { answer, to: peerId });
+  statusEl.textContent = "Connected";
+});
+
+// ICE candidate
+socket.on('ice-candidate', async ({ candidate }) => {
+  if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate));
+});
+
+async function initMedia() {
+  localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  localVid.srcObject = localStream;
+}
+
+function createPeerConnection() {
+  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+  pc.ontrack = e => remoteVid.srcObject = e.streams[0];
+  pc.onicecandidate = e => {
+    if (e.candidate && peerId) {
+      socket.emit('ice-candidate', { candidate: e.candidate, to: peerId });
+    }
+  };
+}
+</script>
+</body>
+</html>
