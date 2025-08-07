@@ -4,7 +4,7 @@ node_modules/
 # Bỏ qua file môi trường
 .env
 package-lock.json
-package.json
+
 # Bỏ qua log
 *.log
 
