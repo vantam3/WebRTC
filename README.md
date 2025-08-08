@@ -74,7 +74,10 @@ Mặc định server sẽ chạy ở cổng `3000` và serve các file tĩnh t�
 
 3. Cho phép truy cập **camera** và **microphone**.
 4. Cả hai join cùng một room (mặc định là `1234`).
-5. Sau khi publish, cả hai sẽ thấy video của nhau.
+5. Peer1: 1.connect => 2.Join => 3. Publish
+   Peer2: 1. Connect => 2. Join => 3. List( sẽ thấy id Peer1) => 4. Chọn và Subscribe
+   *Nếu peer2 tham gia thì Publish, peer1 thấy và Subscribe
+6. Sau khi publish, cả hai sẽ thấy video của nhau.
 
 ## 8. Cơ chế hoạt động
 
