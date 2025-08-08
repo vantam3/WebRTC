@@ -98,21 +98,22 @@ Mặc định server sẽ chạy ở cổng `3000` và serve các file tĩnh t�
 | Không kết nối được Janus | Kiểm tra Gateway và URL WebSocket |
 
 ## 11. Sơ đồ kết nối
+```bash
           Peer1 (Trình duyệt) 
              | 
              |   WebSocket (signaling)  
              |
-Signaling Server (Node.js + Janode) 
+         Signaling Server (Node.js + Janode) 
              | 
              |   WebSocket (Janode API)  
              |
-        Janus Gateway 
+         Janus Gateway 
              |  
              |   Plugin API 
              |
              
-      VideoRoom Plugin
-
+         VideoRoom Plugin
+```
 Luồng media:
 Peer1 ⇄ (SRTP/DTLS) ⇄ Janus VideoRoom ⇄ (SRTP/DTLS) ⇄ Peer2
 
