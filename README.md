@@ -98,42 +98,21 @@ Mặc định server sẽ chạy ở cổng `3000` và serve các file tĩnh t�
 | Không kết nối được Janus | Kiểm tra Gateway và URL WebSocket |
 
 ## 11. Sơ đồ kết nối
+Peer1 (Trình duyệt) 
+   |  WebSocket (signaling)  
+   v
+Signaling Server (Node.js + Janode) 
+   |  WebSocket (Janode API)  
+   v
+Janus Gateway 
+   |  Plugin API  
+   v
+VideoRoom Plugin
 
-graph LR
-    subgraph Browser
-        P1[Peer1 (peer1.html)]
-        P2[Peer2 (peer2.html)]
-    end
+Luồng media:
+Peer1 ⇄ (SRTP/DTLS) ⇄ Janus VideoRoom ⇄ (SRTP/DTLS) ⇄ Peer2
 
-    subgraph Server
-        S[Signaling Server (Node.js + Janode)]
-    end
-
-    subgraph Janus
-        J[Janus Gateway]
-        VR[VideoRoom Plugin]
-    end
-
-    ST[STUN/TURN (tùy chọn)]
-
-    %% Signaling
-    P1 -- WebSocket (app) --> S
-    P2 -- WebSocket (app) --> S
-    S  -- WebSocket (Janode) --> J
-    J  -- internal --> VR
-
-    %% Media path
-    P1 == SRTP/DTLS ==> J
-    P2 == SRTP/DTLS ==> J
-
-    %% ICE
-    P1 -. ICE .- ST
-    P2 -. ICE .- ST
-
-    %% Pub/Sub logic
-    P1 -->|publish| VR
-    P2 -->|publish| VR
-    VR -->|subscribe| P1
-    VR -->|subscribe| P2
-1 ← subscribe ← Janus VideoRoom → subscribe → Peer2
-```
+Cơ chế:
+- Peer1/Peer2 gửi và nhận tín hiệu (join, publish, subscribe, ICE) qua Node.js + Janode.
+- Node.js + Janode gửi lệnh điều khiển tới Janus Gateway.
+- Janus Gateway (VideoRoom plugin) thực hiện publish/subscribe và truyền media giữa các peer.
