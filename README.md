@@ -1,99 +1,139 @@
-# WebRTC
-# Hướng Dẫn Dự Án WebRTC P2P Demo
+# Janus + Janode VideoRoom WebRTC Demo
 
-Demo này minh họa cách xây dựng một cuộc gọi video P2P đơn giản sử dụng **WebRTC** và **Socket.io** làm signaling server.
+## 1. Giới thiệu
 
-## Thư mục dự án
+Dự án này minh họa cách sử dụng **Janus Gateway** và **Janode** để tạo phòng VideoRoom WebRTC, nơi nhiều peer có thể tham gia và chia sẻ audio/video theo mô hình **publish–subscribe**.
+
+## 2. Yêu cầu môi trường
+
+- Node.js ≥ 18
+- Janus Gateway chạy ở chế độ WebSocket (`ws://localhost:8188`)
+- Trình duyệt hỗ trợ WebRTC (Chrome, Firefox, Edge)
+- Máy tính có camera và microphone
+
+## 3. Cấu trúc thư mục
 
 ```
-webrtc-demo/
+WEB-RTC/
+├── server.mjs
 ├── public/
-│   ├── peer1.html       # Trang Caller (Peer1)
-│   └── peer2.html       # Trang Callee (Peer2)
-├── server.js            # Signaling server (Express + Socket.io)
-└── package.json         # Thông tin dự án và dependencies
+│   ├── peer1.html
+│   ├── peer2.html
+│   └── client.js
+└── janode/
 ```
 
-## Yêu cầu môi trường
-
-* Node.js v12+ và npm
-* Trình duyệt hỗ trợ WebRTC (Chrome, Firefox, Edge)
-* Máy có camera + microphone (hoặc thiết bị thay thế)
-
-## Cài đặt
-
-1. **Khởi tạo package.json** (nếu chưa có):
-
-   ```bash
-   npm init -y
-   ```
-2. **Cài dependencies**:
-
-   ```bash
-   npm install express socket.io
-   ```
-3. (Tùy chọn) **Cài `nodemon`** để tự động reload:
-
-   ```bash
-   npm install --save-dev nodemon
-   ```
-
-   Trong `package.json` thêm:
-
-   ```json
-   "scripts": {
-     "dev": "nodemon server.js"
-   }
-   ```
-
-## Chạy Signaling Server
+## 4. Cài đặt
 
 ```bash
-# Không dùng nodemon:
-node server.js
-# Hoặc dùng nodemon:
+npm init -y
+npm install
+# Tùy chọn: cài nodemon
+npm install --save-dev nodemon
+```
+
+Cập nhật `package.json`:
+
+```json
+"scripts": {
+  "dev": "nodemon server.mjs"
+}
+```
+
+## 5. Chạy Janus Gateway
+
+```bash
+docker run -d --name janus-gateway \
+  -p 8088:8088 -p 8188:8188 \
+  -p 10000-10200:10000-10200/udp \
+  meetecho/janus-gateway
+```
+
+Kiểm tra:
+
+- REST: [http://localhost:8088/janus/info](http://localhost:8088/janus/info)
+- WebSocket: `ws://localhost:8188`
+
+## 6. Chạy Signaling Server
+
+```bash
+node server.mjs
+# hoặc
 npm run dev
 ```
 
-Server sẽ lắng nghe cổng **3000** và serve static files từ thư mục `public/`.
+Mặc định server sẽ chạy ở cổng `3000` và serve các file tĩnh từ thư mục `public/`.
 
-## Cách test cuộc gọi P2P
+## 7. Test VideoRoom
 
-1. Mở **hai** cửa sổ/tabs trình duyệt:
+1. Khởi động **Janus Gateway**.
+2. Mở 2 tab trình duyệt:
 
-   * Tab A: `http://localhost:3000/peer2.html` (Peer2 - Callee)
-   * Tab B: `http://localhost:3000/peer1.html` (Peer1 - Caller)
-2. Cho phép truy cập **Camera** và **Microphone**.
-3. Trên **Peer1**, bấm nút **Call Peer**.
-4. **Peer2** nhận thông báo và tự động trả `answer`.
-5. Khi kết nối thành công, cả hai trang sẽ hiển thị video của nhau.
+   - Peer1: [http://localhost:3000/peer1.html](http://localhost:3000/peer1.html)
+   - Peer2: [http://localhost:3000/peer2.html](http://localhost:3000/peer2.html)
 
-## Cơ chế hoạt động
+3. Cho phép truy cập **camera** và **microphone**.
+4. Cả hai join cùng một room (mặc định là `1234`).
+5. Sau khi publish, cả hai sẽ thấy video của nhau.
 
-1. **Signaling**: Socket.io trao đổi:
+## 8. Cơ chế hoạt động
 
-   * `join`: thông báo online
-   * `offer` / `answer`: SDP negotiation
-   * `ice-candidate`: ICE candidate exchange
-2. **WebRTC**:
+- **Signaling** thông qua Janus/Janode: `join`, `publish`, `subscribe`, `trickle ICE`.
+- **WebRTC** flow: `getUserMedia` → `RTCPeerConnection` → `ontrack`.
+- Media truyền trực tiếp qua **SRTP/DTLS** sau khi **ICE** thành công.
 
-   * `getUserMedia()`: lấy stream local
-   * `RTCPeerConnection`: createOffer / createAnswer
-   * `onicecandidate` & `addIceCandidate`
-   * `ontrack`: gán stream remote cho `<video>`
-3. **P2P Media**: sau negotiation và ICE, kênh SRTP/DTLS truyền audio/video mã hóa trực tiếp giữa hai peer.
+## 9. Tuỳ chỉnh
 
-## Tuỳ chỉnh
+- **Room ID**: thay đổi trong `server.mjs`.
+- **STUN/TURN server**: chỉnh `iceServers` trong các file HTML.
+- **Giao diện**: sửa trong `peer1.html`, `peer2.html`.
 
-* **STUN/TURN**: chỉnh `iceServers` trong HTML để thêm TURN server nếu cần.
-* **UI & logic**: sửa `public/peer*.html` để thêm nút, status, data channel, v.v.
+## 10. Khắc phục sự cố
 
-## Khắc phục sự cố
+| Sự cố | Giải pháp |
+|-------|-----------|
+| Không thấy peer | Kiểm tra Room ID giống nhau |
+| Không có audio/video | Kiểm tra quyền camera/mic |
+| ICE failed | Thêm TURN server hoặc đổi mạng |
+| Không kết nối được Janus | Kiểm tra Gateway và URL WebSocket |
 
-* **Không thấy peer**: đảm bảo cả hai client emit `join` sau khi connect.
-* **Media error**: kiểm tra camera/microphone, browser permission.
-* **ICE failure**: thêm TURN server hoặc kiểm tra mạng.
+## 11. Sơ đồ kết nối
 
----
+graph LR
+    subgraph Browser
+        P1[Peer1 (peer1.html)]
+        P2[Peer2 (peer2.html)]
+    end
 
-Mọi câu hỏi hoặc cần hỗ trợ thêm, vui lòng liên hệ!
+    subgraph Server
+        S[Signaling Server (Node.js + Janode)]
+    end
+
+    subgraph Janus
+        J[Janus Gateway]
+        VR[VideoRoom Plugin]
+    end
+
+    ST[STUN/TURN (tùy chọn)]
+
+    %% Signaling
+    P1 -- WebSocket (app) --> S
+    P2 -- WebSocket (app) --> S
+    S  -- WebSocket (Janode) --> J
+    J  -- internal --> VR
+
+    %% Media path
+    P1 == SRTP/DTLS ==> J
+    P2 == SRTP/DTLS ==> J
+
+    %% ICE
+    P1 -. ICE .- ST
+    P2 -. ICE .- ST
+
+    %% Pub/Sub logic
+    P1 -->|publish| VR
+    P2 -->|publish| VR
+    VR -->|subscribe| P1
+    VR -->|subscribe| P2
+1 ← subscribe ← Janus VideoRoom → subscribe → Peer2
+```

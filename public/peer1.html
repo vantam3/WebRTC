@@ -1,99 +1,209 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Peer1</title>
+  <meta charset="UTF-8" />
+  <title>Peer 1 VideoRoom</title>
   <style>
-    video { width: 300px; margin: 5px; background: #000; }
+    video { width: 320px; height: 240px; border:1px solid #333; background:#000; }
+    #log { max-height: 240px; overflow:auto; border:1px solid #ccc; padding:6px; font:12px/1.35 monospace; }
+    button, select { margin:4px; }
   </style>
 </head>
 <body>
-  <h2>Peer1</h2>
-  <div id="status">Connecting...</div>
-  <button id="callBtn" disabled>Call Peer</button>
+  <h2>Peer 1 Publisher/Subscriber</h2>
+
   <div>
     <video id="localVideo" autoplay muted playsinline></video>
     <video id="remoteVideo" autoplay playsinline></video>
   </div>
 
-<script src="/socket.io/socket.io.js"></script>
-<script>
-const socket = io();
-let pc, peerId;
-let localStream;
-const statusEl = document.getElementById('status');
-const callBtn = document.getElementById('callBtn');
-const localVid = document.getElementById('localVideo');
-const remoteVid = document.getElementById('remoteVideo');
+  <div>
+    <button onclick="connectWS()">1) Connect WS</button>
+    <button onclick="joinRoom()">2) Join as Publisher</button>
+    <button onclick="publishOwnFeed()">3) Publish</button>
+    <button onclick="listPublishers()">4) List</button>
+    <select id="publisherSelect"></select>
+    <button onclick="subscribeToSelected()">5) Subscribe</button>
+    <button onclick="leaveRoom()">Leave</button>
+  </div>
 
-socket.on('connect', async () => {
-  statusEl.textContent = "Connected to server";
-  await initMedia();
-  socket.emit('join');
-});
 
-socket.on('peers', peers => {
-  peerId = peers[0] || null;
-  callBtn.disabled = !peerId;
-});
+  <pre id="log"></pre>
 
-callBtn.onclick = () => {
-  if (peerId) {
-    socket.emit('call-request', { to: peerId });
-    statusEl.textContent = "Calling...";
-    callBtn.disabled = true;
-  }
-};
+  <script>
+    const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-//accepted
-socket.on('call-accepted', async ({ from }) => {
-  peerId = from;
-  createPeerConnection();
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  socket.emit('offer', { offer, to: peerId });
-});
+    let socket;
+    const name = 'peer1';
+    let myid = null;
+    let publishers = [];
+    let localStream = null;
+    let pc = null;      // publisher PC
+    let subPc = null;   // subscriber PC
+    let subscribing = false;
 
-//  rejected
-socket.on('call-rejected', () => {
-  statusEl.textContent = "Call rejected";
-  callBtn.disabled = false;
-});
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const pubSel = document.getElementById('publisherSelect');
+    const logEl = document.getElementById('log');
 
-// Answer 
-socket.on('answer', async ({ answer }) => {
-  await pc.setRemoteDescription(new RTCSessionDescription(answer));
-  statusEl.textContent = " Connected";
-});
-
-socket.on('offer', async ({ offer, from }) => {
-  peerId = from;
-  createPeerConnection();
-  await pc.setRemoteDescription(new RTCSessionDescription(offer));
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  socket.emit('answer', { answer, to: peerId });
-});
-
-socket.on('ice-candidate', async ({ candidate }) => {
-  if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate));
-});
-
-async function initMedia() {
-  localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-  localVid.srcObject = localStream;
-}
-
-function createPeerConnection() {
-  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-  pc.ontrack = e => remoteVid.srcObject = e.streams[0];
-  pc.onicecandidate = e => {
-    if (e.candidate && peerId) {
-      socket.emit('ice-candidate', { candidate: e.candidate, to: peerId });
+    function log(...args) {
+      const line = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+      console.log(...args);
+      logEl.textContent += line + '\n';
+      logEl.scrollTop = logEl.scrollHeight;
     }
-  };
-}
-</script>
+
+    function connectWS() {
+      if (socket && socket.readyState === WebSocket.OPEN) return log('WS already open');
+      socket = new WebSocket('ws://localhost:4000');
+
+      socket.onopen = () => log(' WebSocket connected');
+      socket.onclose = () => log(' WebSocket closed');
+      socket.onerror = (e) => log('WS error', e);
+
+      socket.onmessage = async (event) => {
+        const msg = JSON.parse(event.data);
+        log('', msg);
+
+        if (msg.type === 'error') { log('Server error:', msg.reason); return; }
+
+        if (msg.type === 'joined') {
+          myid = msg.id;
+          log('Joined room with ID:', myid);
+        }
+
+        // PUBLISHER JSEP
+        if (msg.type === 'jsep') {
+          if (!pc) return;
+          if (msg.jsep.type === 'answer') {
+            await pc.setRemoteDescription(msg.jsep);
+            log('Publisher ANSWER set');
+          } else if (msg.jsep.type === 'offer') {
+            await pc.setRemoteDescription(msg.jsep);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            socket.send(JSON.stringify({ type: 'publish', jsep: answer }));
+            log('Publisher sent ANSWER (server-offer path)');
+          }
+        }
+
+        // SUBSCRIBER JSEP (Janus → OFFER)
+        if (msg.type === 'subscriber_jsep') {
+          try {
+            if (!subPc) return;
+            await subPc.setRemoteDescription(msg.jsep);
+            const answer = await subPc.createAnswer();
+            await subPc.setLocalDescription(answer);
+            socket.send(JSON.stringify({ type: 'start_subscribe', jsep: answer }));
+            log('Sent ANSWER & START (subscriber)');
+          } catch (e) {
+            log(' subscriber_jsep failed', e);
+          } finally {
+            subscribing = false;
+          }
+        }
+
+        if (msg.type === 'publishers') {
+          publishers = msg.publishers || [];
+          updatePublisherSelect();
+          log('Publishers:', publishers);
+        }
+
+        if (msg.type === 'stale_feed') {
+          log(`Feed ${msg.feed} stale. Refresh list.`);
+          publishers = msg.publishers || [];
+          updatePublisherSelect();
+          subscribing = false;
+          alert('Feed vừa chọn không còn. Chọn lại feed mới.');
+        }
+
+        if (msg.type === 'trickle') {
+          if (msg.role === 'publisher' && pc) pc.addIceCandidate(msg.candidate);
+          if (msg.role === 'subscriber' && subPc) subPc.addIceCandidate(msg.candidate);
+        }
+
+      };
+    }
+
+    function joinRoom() {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return log(' Open WS first');
+      log(' Join as publisher');
+      socket.send(JSON.stringify({ type: 'join', name }));
+    }
+
+    async function publishOwnFeed() {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return log('Open WS first');
+
+      pc && pc.close();
+      pc = new RTCPeerConnection(rtcConfig);
+      pc.onicecandidate = (e) => { if (e.candidate) socket.send(JSON.stringify({ type:'trickle', role:'publisher', candidate:e.candidate })); };
+      pc.onconnectionstatechange = () => log('Publisher PC:', pc.connectionState);
+      pc.oniceconnectionstatechange = () => log('pubPc ice:', pc.iceConnectionState);
+
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+      localVideo.srcObject = localStream;
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.send(JSON.stringify({ type: 'publish_offer', jsep: offer }));
+      log(' Sending publish_offer');
+    }
+
+    function listPublishers() {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return log('Open WS first');
+      socket.send(JSON.stringify({ type: 'list' }));
+      log(' Request publishers');
+    }
+
+    function updatePublisherSelect() {
+      pubSel.innerHTML = '';
+      publishers.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = `${p.display || p.id} (#${p.id})`;
+        pubSel.appendChild(opt);
+      });
+    }
+
+    async function subscribeToSelected() {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return log('Open WS first');
+      if (subscribing) return log(' Already subscribing...');
+      subscribing = true;
+
+      // refresh list để tránh dùng feed cũ
+      await new Promise((resolve) => {
+        const onMsg = (ev) => { const m = JSON.parse(ev.data); if (m.type === 'publishers') { socket.removeEventListener('message', onMsg); resolve(); } };
+        socket.addEventListener('message', onMsg);
+        socket.send(JSON.stringify({ type: 'list' }));
+      });
+
+      if (!publishers.length) { subscribing = false; return alert('No publishers yet'); }
+      const feedId = parseInt(pubSel.value || publishers[0].id, 10);
+      log('Subscribing to feed', feedId);
+
+      if (subPc) { try { subPc.close(); } catch{} }
+      subPc = new RTCPeerConnection(rtcConfig);
+      subPc.onicecandidate = (e) => { if (e.candidate) socket.send(JSON.stringify({ type:'trickle', role:'subscriber', candidate:e.candidate })); };
+      subPc.oniceconnectionstatechange = () => log('subPc ice:', subPc.iceConnectionState);
+      subPc.ontrack = (e) => {
+        log('Remote stream received');
+        remoteVideo.srcObject = e.streams[0];
+        remoteVideo.muted = true;
+        remoteVideo.play?.().catch(()=>{});
+      };
+
+      socket.send(JSON.stringify({ type: 'subscribe', feed: feedId }));
+    }
+
+    function leaveRoom() {
+      log(' Leaving room');
+      try { socket && socket.send(JSON.stringify({ type: 'leave' })); } catch {}
+      try { pc && pc.close(); } catch {}
+      try { subPc && subPc.close(); } catch {}
+      try { socket && socket.close(); } catch {}
+    }
+  </script>
 </body>
 </html>
