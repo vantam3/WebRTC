@@ -27,7 +27,6 @@ WEB-RTC/
 ├── public/
 │   ├── peer1.html
 │   ├── peer2.html
-│   ├── client.js
 │   └── livestream/
 │       ├── publisher.html
 │       └── viewer.html
@@ -147,7 +146,7 @@ Peer1 (Browser)  <---SRTP/DTLS--->  Janus Gateway (VideoRoom plugin)  <---SRTP/D
 
 ### Livestream
 ```
-FFmpeg (Webcam/Mic hoặc file video) 
+FFmpeg (Webcam/Mic) 
       |
       | RTP (VP8/Opus) qua UDP
       v

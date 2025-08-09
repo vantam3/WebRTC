@@ -219,7 +219,7 @@ server.listen(4000, () => {
   console.log(' http://localhost:4000');
 });
 
-//live
+//livestream
 import StreamingPlugin from './janode/src/plugins/streaming-plugin.js';
 
 const JANUS_RTP_IP = '127.0.0.1';      // IP mà FFmpeg sẽ gửi RTP tới (nếu FFmpeg chạy cùng máy Docker Desktop thì để 127.0.0.1)

@@ -22,7 +22,7 @@
   </style>
 </head>
 <body>
-  <h1>📺 Livestream Viewer (Janus Streaming)</h1>
+  <h1>Livestream Viewer (Janus Streaming)</h1>
   <p class="muted">Kết nối tới <b>ws://&lt;server&gt;:4001/livestream</b>, gửi <span class="mono">watch</span>, nhận OFFER &rarr; trả ANSWER, nhận media qua WebRTC.</p>
 
   <div class="card grid">
@@ -48,7 +48,7 @@
   </div>
 
   <div class="card">
-    <h3>📜 Log</h3>
+    <h3>Log</h3>
     <div id="log" class="log"></div>
   </div>
 
@@ -143,7 +143,7 @@
         catch (e) { log('addIceCandidate error', e?.message||e); }
       }
       else if (msg.type === 'webrtcup') {
-        log('✅ WebRTC up');
+        log('WebRTC up');
         // Có thể getStats để chẩn đoán nếu cần
         setTimeout(async () => {
           try {
@@ -155,10 +155,10 @@
         }, 1000);
       }
       else if (msg.type === 'error') {
-        log('❌ Error:', msg.reason || JSON.stringify(msg));
+        log('Error:', msg.reason || JSON.stringify(msg));
       }
       else {
-        log('ℹ️', msg);
+        log('', msg);
       }
     };
   };
