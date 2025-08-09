@@ -197,11 +197,11 @@ wss.on('connection', async (ws) => {
         try { if (subHandle) await subHandle.detach(); } catch {}
         try { await session.destroy(); } catch {}
         if (name) delete peers[name];
-        console.log(`👋 ${name} left`);
+        console.log(` ${name} left`);
         return;
       }
     } catch (err) {
-      console.error('❌ ws message handler error:', err);
+      console.error('ws message handler error:', err);
       ws.send(JSON.stringify({ type: 'error', reason: err?.message || 'server error' }));
     }
   });
@@ -211,10 +211,141 @@ wss.on('connection', async (ws) => {
     try { if (subHandle) await subHandle.detach(); } catch {}
     try { await session.destroy(); } catch {}
     if (name) delete peers[name];
-    console.log('❌ WS disconnected');
+    console.log('WS disconnected');
   });
 });
 
 server.listen(4000, () => {
-  console.log('🌐 http://localhost:4000');
+  console.log(' http://localhost:4000');
+});
+
+//live
+import StreamingPlugin from './janode/src/plugins/streaming-plugin.js';
+
+const JANUS_RTP_IP = '127.0.0.1';      // IP mà FFmpeg sẽ gửi RTP tới (nếu FFmpeg chạy cùng máy Docker Desktop thì để 127.0.0.1)
+const RTP_VIDEO_PORT = 10000;          // Nằm trong range Docker đã publish: 10000–10200/udp
+const RTP_AUDIO_PORT = 10002;
+
+const lsServer = http.createServer();
+const livestreamWSS = new WebSocketServer({ server: lsServer, path: '/livestream' });
+lsServer.listen(4001, () => console.log('Livestream WS: ws://localhost:4001/livestream'));
+
+livestreamWSS.on('connection', async (ws) => {
+  console.log('Livestream WS client connected');
+  let session = await connection.create();  // dùng connection Janus đã có ở đầu file
+  let handle = null;
+
+  const send = (o) => { try { ws.send(JSON.stringify(o)); } catch {} };
+  const attachSafe = async () => {
+    if (!session) session = await connection.create();
+    if (handle) { try { await handle.detach(); } catch {} }
+    handle = await session.attach(StreamingPlugin);
+    return handle;
+  };
+
+  ws.on('message', async (raw) => {
+    let data; try { data = JSON.parse(raw); } catch { return; }
+
+    // Publisher: tạo mountpoint cố định
+    if (data.type === 'start_stream') {
+      const id = Number(data.id) || 9999;
+      const name = String(data.name || 'mylive');
+      try {
+        await attachSafe();
+
+        try { await handle.message({ request: 'destroy', id }); } catch {}
+
+        const createRes = await handle.message({
+          request: 'create',
+          type: 'rtp',
+          id, name,
+          description: 'Live via RTP (VP8/Opus)',
+          is_private: false,
+          audio: true, video: true,
+          videoport: RTP_VIDEO_PORT,
+          audioport: RTP_AUDIO_PORT,
+          'rtcp-mux': true,
+          rtp_profile: 'avpf',
+          videopt: 96,  videortpmap: 'VP8/90000',
+          audiopt: 111, audiortpmap: 'opus/48000/2'
+        });
+        console.log('[ls] createRes', createRes?.plugindata?.data || createRes);
+
+        send({ type: 'mount_created', id, rtp: { ip: JANUS_RTP_IP, video_port: RTP_VIDEO_PORT, audio_port: RTP_AUDIO_PORT } });
+      } catch (e) {
+        console.error('start_stream error:', e);
+        send({ type: 'error', reason: e?.message || String(e) });
+      }
+      return;
+    }
+
+    // Publisher: xoá mountpoint
+    if (data.type === 'destroy_stream') {
+      const id = Number(data.id) || 9999;
+      try {
+        if (!handle) await attachSafe();
+        await handle.message({ request: 'destroy', id });
+        send({ type: 'mount_destroyed', id });
+      } catch (e) {
+        console.error('destroy_stream error:', e);
+        send({ type: 'error', reason: e?.message || String(e) });
+      }
+      return;
+    }
+
+    // Viewer: watch -> trả OFFER (JSEP)
+    if (data.type === 'watch') {
+      const id = Number(data.id) || 9999;
+      try {
+        await attachSafe();
+        const res = await handle.message({ request: 'watch', id, audio: true, video: true });
+        if (!res.jsep) throw new Error('No JSEP offer from Streaming plugin');
+        send({ type: 'jsep', jsep: res.jsep });    // khớp viewer.html tranh gui sdp
+      } catch (e) {
+        console.error('watch error:', e);
+        send({ type: 'error', reason: e?.message || String(e) });
+      }
+      return;
+    }
+
+    // Viewer: start (ANSWER)
+    if (data.type === 'start' && data.jsep) {
+      try {
+        await handle.message({ request: 'start' }, data.jsep);
+        console.log('[ls] webrtc start ok');
+        send({ type: 'webrtcup' });
+      } catch (e) {
+        console.error('start error:', e);
+        send({ type: 'error', reason: e?.message || String(e) });
+      }
+      return;
+    }
+
+    // ICE trickle (kể cả completed)
+    if (data.type === 'trickle') {
+      try {
+        if (data.candidate && data.candidate.completed) {
+          await handle.trickle({ completed: true });
+        } else if (data.completed) {
+          await handle.trickle({ completed: true });
+        } else if (data.candidate) {
+          await handle.trickle(data.candidate);
+        }
+      } catch {}
+      return;
+    }
+
+    // Viewer: unwatch
+    if (data.type === 'unwatch') {
+      try { if (handle) await handle.message({ request: 'stop' }); } catch {}
+      return;
+    }
+  });
+
+  ws.on('close', async () => {
+    try { if (handle) await handle.detach(); } catch {}
+    try { if (session) await session.destroy(); } catch {}
+    handle = null; session = null;
+    console.log('Livestream WS disconnected');
+  });
 });

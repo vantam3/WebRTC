@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Livestream Publisher (Janus Streaming)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+    body { margin: 24px; }
+    .row { display:flex; gap:12px; flex-wrap: wrap; align-items:center; }
+    button { padding:10px 14px; border:0; border-radius:10px; cursor:pointer; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    button.primary { background:#2563eb; color:white; }
+    button.warn { background:#ef4444; color:white; }
+    .card { padding:16px; border-radius:14px; background:#f8fafc; box-shadow: inset 0 0 0 1px #e5e7eb; margin:12px 0; }
+    code { background:#111827; color:#f3f4f6; padding:12px; border-radius:8px; display:block; overflow:auto; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .ok { color:#16a34a; }
+    .bad { color:#dc2626; }
+    .muted { color:#6b7280; }
+    .small { font-size: 12px; }
+    .log { white-space: pre-wrap; font-size: 12px; background: #0b1020; color:#d1d5db; padding: 12px; border-radius: 8px; height: 180px; overflow:auto; }
+    input[type="text"], input[type="number"] { padding:8px 10px; border-radius:8px; border:1px solid #e5e7eb; }
+    label { display:block; font-size:12px; color:#6b7280; margin-bottom:4px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:12px; }
+  </style>
+</head>
+<body>
+  <h1> Livestream Publisher (Janus Streaming)</h1>
+  <p class="muted">Mô hình này dùng <b>Janus Streaming Plugin</b>: trình duyệt KHÔNG đẩy media trực tiếp. 
+  Bạn sẽ tạo <b>mountpoint</b> trên server, rồi dùng <b>ffmpeg/gstreamer</b> để push RTP. Viewer (trình duyệt) sẽ xem qua WebRTC.</p>
+
+  <div class="card grid">
+    <div>
+      <label>WebSocket URL</label>
+      <input id="wsurl" type="text" style="width:100%" />
+      <div class="small muted">Mặc định: <span id="wsurl-default"></span></div>
+    </div>
+    <div>
+      <label>Mountpoint ID</label>
+      <input id="mountId" type="number" value="1111" />
+    </div>
+    <div>
+      <label>Tên stream</label>
+      <input id="streamName" type="text" value="mylive" />
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="btnConnect" class="primary">Kết nối WS</button>
+    <button id="btnCreate" class="primary" disabled>Tạo mountpoint</button>
+    <button id="btnDestroy" class="warn" disabled>Xoá mountpoint</button>
+  </div>
+
+  <div class="card">
+    <h3>Lệnh FFmpeg (Windows - DirectShow) để push RTP</h3>
+    <p class="muted small">
+      Ghi chú: hãy đổi <span class="mono">"HD Webcam"</span> và 
+      <span class="mono">"Microphone Array (Intel® Smart Sound Technology for Digital Microphones)"</span> 
+      thành đúng tên thiết bị của bạn.
+    </p>
+    <code id="ffcmd" class="mono">ffmpeg -f dshow -i video="HD Webcam":audio="Microphone Array (Intel® Smart Sound Technology for Digital Microphones)" -rtbufsize 256M -fflags nobuffer -use_wallclock_as_timestamps 1 -video_size 1280x720 -framerate 30 -pix_fmt yuv420p -map 0:v:0 -c:v libvpx -b:v 1M -deadline realtime -g 60 -an -payload_type 96 -f rtp rtp://127.0.0.1:10000 -map 0:a:0 -ar 48000 -ac 2 -c:a libopus -b:a 96k -application lowdelay -vn -payload_type 111 -f rtp rtp://127.0.0.1:10002</code>
+    <div class="small muted">* Khi mountpoint được tạo, lệnh bên trên sẽ tự cập nhật IP/port (video/audio) do server trả về.</div>
+  </div>
+
+  <div class="card">
+    <h3>Log</h3>
+    <div id="log" class="log"></div>
+  </div>
+
+<script>
+(function(){
+  const $ = (sel) => document.querySelector(sel);
+  const logEl = $("#log");
+  const defUrl = (location.protocol === "https:" ? "wss://" : "ws://") +
+               location.hostname + ":4001/livestream";
+  $("#wsurl-default").textContent = defUrl;
+  $("#wsurl").value = defUrl;
+
+  // Mặc định tên thiết bị Windows (có thể sửa cho phù hợp máy bạn)
+  const DEFAULT_VIDEO_DEV = 'HD Webcam';
+  const DEFAULT_AUDIO_DEV = 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)';
+
+  let ws = null;
+  let connected = false;
+
+  function log(...args) {
+    const t = new Date().toISOString().replace('T',' ').replace('Z','');
+    logEl.textContent += `[${t}] ` + args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ') + "\n";
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function setState() {
+    $("#btnCreate").disabled = !connected;
+    $("#btnDestroy").disabled = !connected;
+  }
+
+  $("#btnConnect").onclick = () => {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      log("WS already connected/connecting");
+      return;
+    }
+    const url = $("#wsurl").value.trim() || defUrl;
+    ws = new WebSocket(url);
+    ws.onopen = () => { connected = true; setState(); log("WS connected:", url); };
+    ws.onclose = () => { connected = false; setState(); log("WS closed"); };
+    ws.onerror = (e) => log("WS error", e.message || e);
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "mount_created") {
+          log(" Mountpoint created:", msg);
+          if (msg.rtp) {
+            const ip = (msg.rtp.ip || "127.0.0.1");
+            const video_port = msg.rtp.video_port || 10000;
+            const audio_port = msg.rtp.audio_port || 10002;
+            const cmd = `ffmpeg -f dshow -i video="${DEFAULT_VIDEO_DEV}":audio="${DEFAULT_AUDIO_DEV}" -rtbufsize 256M -fflags nobuffer -use_wallclock_as_timestamps 1 -video_size 1280x720 -framerate 30 -pix_fmt yuv420p -map 0:v:0 -c:v libvpx -b:v 1M -deadline realtime -g 60 -an -payload_type 96 -f rtp rtp://${ip}:${video_port} -map 0:a:0 -ar 48000 -ac 2 -c:a libopus -b:a 96k -application lowdelay -vn -payload_type 111 -f rtp rtp://${ip}:${audio_port}`;
+            $("#ffcmd").textContent = cmd;
+          }
+        } else if (msg.type === "mount_destroyed") {
+          log("Mountpoint destroyed:", msg);
+        } else if (msg.type === "error") {
+          log("Error:", msg.reason || msg);
+        } else {
+          log("", msg);
+        }
+      } catch (e) {
+        log("recv:", ev.data);
+      }
+    };
+  };
+
+  $("#btnCreate").onclick = () => {
+    if (!connected) return;
+    const id = parseInt($("#mountId").value, 10) || 9999;
+    const name = $("#streamName").value.trim() || "mylive";
+    ws.send(JSON.stringify({ type: "start_stream", id, name }));
+    log("-> start_stream", { id, name });
+  };
+
+  $("#btnDestroy").onclick = () => {
+    if (!connected) return;
+    const id = parseInt($("#mountId").value, 10) || 9999;
+    ws.send(JSON.stringify({ type: "destroy_stream", id }));
+    log("-> destroy_stream", { id });
+  };
+})();
+</script>
+</body>
+</html>

@@ -34,7 +34,7 @@
     const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
     let socket;
-    const name = 'Bob';
+    const name = 'Peer2';
     let myid = null;
     let publishers = [];
     let localStream = null;
@@ -66,7 +66,7 @@
         const msg = JSON.parse(event.data);
         log('', msg);
 
-        if (msg.type === 'error') { log('❌ Server error:', msg.reason); return; }
+        if (msg.type === 'error') { log('Server error:', msg.reason); return; }
 
         if (msg.type === 'joined') {
           myid = msg.id;
@@ -155,7 +155,7 @@
     function listPublishers() {
       if (!socket || socket.readyState !== WebSocket.OPEN) return log('Open WS first');
       socket.send(JSON.stringify({ type: 'list' }));
-      log('🔎 Request publishers');
+      log('Request publishers');
     }
 
     function updatePublisherSelect() {

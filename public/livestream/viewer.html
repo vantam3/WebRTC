@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Livestream Viewer (Janus Streaming)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+    body { margin: 24px; }
+    video { width: 100%; max-width: 960px; background: #000; border-radius: 12px; }
+    .row { display:flex; gap:12px; flex-wrap: wrap; align-items:center; }
+    button { padding:10px 14px; border:0; border-radius:10px; cursor:pointer; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    button.primary { background:#2563eb; color:white; }
+    button.warn { background:#ef4444; color:white; }
+    .card { padding:16px; border-radius:14px; background:#f8fafc; box-shadow: inset 0 0 0 1px #e5e7eb; margin:12px 0; }
+    .muted { color:#6b7280; }
+    .small { font-size: 12px; }
+    .log { white-space: pre-wrap; font-size: 12px; background: #0b1020; color:#d1d5db; padding: 12px; border-radius: 8px; height: 200px; overflow:auto; }
+    input[type="text"], input[type="number"] { padding:8px 10px; border-radius:8px; border:1px solid #e5e7eb; }
+    label { display:block; font-size:12px; color:#6b7280; margin-bottom:4px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:12px; }
+  </style>
+</head>
+<body>
+  <h1>📺 Livestream Viewer (Janus Streaming)</h1>
+  <p class="muted">Kết nối tới <b>ws://&lt;server&gt;:4001/livestream</b>, gửi <span class="mono">watch</span>, nhận OFFER &rarr; trả ANSWER, nhận media qua WebRTC.</p>
+
+  <div class="card grid">
+    <div>
+      <label>WebSocket URL</label>
+      <input id="wsurl" type="text" style="width:100%" />
+      <div class="small muted">Mặc định: <span id="wsurl-default"></span></div>
+    </div>
+    <div>
+      <label>Mountpoint ID</label>
+      <input id="mountId" type="number" value="1111" />
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="btnConnect" class="primary">Kết nối WS</button>
+    <button id="btnWatch" class="primary" disabled>Watch</button>
+    <button id="btnUnwatch" class="warn" disabled>Unwatch</button>
+  </div>
+
+  <div class="card">
+    <video id="player" playsinline autoplay controls></video>
+  </div>
+
+  <div class="card">
+    <h3>📜 Log</h3>
+    <div id="log" class="log"></div>
+  </div>
+
+<script>
+(function(){
+  const $ = (sel) => document.querySelector(sel);
+  const logEl = $("#log");
+  const defUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.hostname + ":4001/livestream";
+  $("#wsurl-default").textContent = defUrl;
+  $("#wsurl").value = defUrl;
+
+  const player = document.getElementById('player');
+  player.muted = true; // giúp autoplay không bị chặn
+  player.autoplay = true;
+  player.playsInline = true;
+
+  let ws = null, connected = false, watching = false, pc = null;
+
+  function log(){
+    const t = new Date().toISOString().replace('T',' ').replace('Z','');
+    const line = `[${t}] ` + Array.from(arguments).map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+    logEl.textContent += line + "\n";
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function setState(){
+    $("#btnWatch").disabled = !connected || watching;
+    $("#btnUnwatch").disabled = !connected || !watching;
+  }
+
+  function createPC(){
+    if (pc) { try { pc.close(); } catch {} pc = null; }
+    pc = new RTCPeerConnection({
+      bundlePolicy: "max-bundle",
+      rtcpMuxPolicy: "require",
+      iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
+    });
+
+    // đảm bảo recvonly (subscriber)
+    try { pc.addTransceiver('video', { direction: 'recvonly' }); } catch {}
+    try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
+
+    pc.ontrack = (e) => {
+      log('📡 ontrack, streams:', e.streams.length);
+      if (player.srcObject !== e.streams[0]) {
+        player.srcObject = e.streams[0];
+        player.play && player.play().catch(err => log('autoplay blocked', err?.message||err));
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => log('iceState:', pc.iceConnectionState);
+
+    pc.onicecandidate = (ev) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (ev.candidate) {
+        ws.send(JSON.stringify({ type: 'trickle', role: 'streaming', candidate: ev.candidate }));
+        log('-> trickle', ev.candidate.candidate);
+      } else {
+        ws.send(JSON.stringify({ type: 'trickle', role: 'streaming', completed: true }));
+        log('-> trickle completed');
+      }
+    };
+
+    return pc;
+  }
+
+  $("#btnConnect").onclick = () => {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) { log('WS already connected/connecting'); return; }
+    const url = $("#wsurl").value.trim() || defUrl;
+    ws = new WebSocket(url);
+    ws.onopen = () => { connected = true; setState(); log('WS connected:', url); };
+    ws.onclose = () => { connected = false; watching = false; setState(); log('WS closed'); };
+    ws.onerror = (e) => log('WS error', e.message || e);
+    ws.onmessage = async (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { log('recv(raw):', ev.data); return; }
+
+      if (msg.type === 'jsep' || msg.type === 'subscriber_jsep') {
+        log('<= offer', msg.jsep?.type);
+        try {
+          await pc.setRemoteDescription(msg.jsep);
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          ws.send(JSON.stringify({ type: 'start', jsep: answer }));
+          log('-> answer (start)');
+        } catch (err) {
+          log('SDP error:', err?.message||err);
+        }
+      }
+      else if (msg.type === 'trickle' && msg.candidate) {
+        try { await pc.addIceCandidate(msg.candidate); log('<= server trickle added'); }
+        catch (e) { log('addIceCandidate error', e?.message||e); }
+      }
+      else if (msg.type === 'webrtcup') {
+        log('✅ WebRTC up');
+        // Có thể getStats để chẩn đoán nếu cần
+        setTimeout(async () => {
+          try {
+            const stats = await pc.getStats(null);
+            let inbound = 0;
+            stats.forEach(r => { if (r.type === 'inbound-rtp' && !r.isRemote) inbound += (r.bytesReceived||0); });
+            log('inbound bytesReceived:', inbound);
+          } catch {}
+        }, 1000);
+      }
+      else if (msg.type === 'error') {
+        log('❌ Error:', msg.reason || JSON.stringify(msg));
+      }
+      else {
+        log('ℹ️', msg);
+      }
+    };
+  };
+
+  $("#btnWatch").onclick = () => {
+    if (!connected) return;
+    createPC();
+    const id = parseInt($("#mountId").value, 10) || 9999;
+    ws.send(JSON.stringify({ type: 'watch', id }));
+    watching = true; setState(); log('-> watch', { id });
+  };
+
+  $("#btnUnwatch").onclick = () => {
+    if (!connected) return;
+    ws.send(JSON.stringify({ type: 'unwatch' }));
+    watching = false; setState(); log('-> unwatch');
+    if (player.srcObject) { player.srcObject.getTracks().forEach(t => { try { t.stop(); } catch {} }); player.srcObject = null; }
+    if (pc) { try { pc.close(); } catch {} pc = null; }
+  };
+})();
+</script>
+</body>
+</html>
